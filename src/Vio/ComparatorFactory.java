@@ -1,10 +1,13 @@
 package Vio;
 
-
 public class ComparatorFactory {
 
     public interface KeyComparator{
         int keycomp(byte[] p1, int o1, int l1, byte[] p2, int o2, int l2);
+    }
+
+    public interface ValueComparator{
+
     }
 
     public static final class BigEndianIntCom implements KeyComparator{

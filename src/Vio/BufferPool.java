@@ -30,7 +30,7 @@ import java.util.Map;
 public class BufferPool {
     private static final Path ROOT_PATH = getRootPath();
     private static final int MAX_FRAME_NUM = 20;
-    public byte[] metaPage;
+    public int[] metaPage;
 
 
     private static Path getRootPath(){
@@ -89,28 +89,22 @@ public class BufferPool {
     }
 
     private void initMetaPage() throws IOException {
-        metaPage = new byte[Page.PAGE_SIZE];
-        ByteBuffer in = ByteBuffer.wrap(metaPage, 0, Page.PAGE_SIZE);
-        int total = 0;
-        while (in.hasRemaining()) {
-            int n = ch_let.read(in, total);
-            if (n <= 0) throw new IOException("EOF reading meta page");
-            total += n;
-        }
-        ByteBuffer bb = ByteBuffer.wrap(metaPage);
-        pagenum_let    = bb.getInt();
-        pagenum_gar    = bb.getInt();
-        nextpageid_let = bb.getInt();
-        nextpageid_gar = bb.getInt();
+        pagenum_let    = metaPage[0];
+        pagenum_gar    = metaPage[1];
+        nextpageid_let = metaPage[2];
+        nextpageid_gar = metaPage[3];
     }
 
     private void closeMetaPage() throws IOException {
-        ByteBuffer bb = ByteBuffer.wrap(metaPage);
-        bb.putInt(pagenum_let);
-        bb.putInt(pagenum_gar);
-        bb.putInt(nextpageid_let);
-        bb.putInt(nextpageid_gar);
-        ByteBuffer out = ByteBuffer.wrap(metaPage, 0, Page.PAGE_SIZE);
+        metaPage[0] = pagenum_let;
+        metaPage[1] = pagenum_gar;
+        metaPage[2] = nextpageid_let;
+        metaPage[3] = nextpageid_gar;
+        ByteBuffer out = ByteBuffer.allocateDirect(Page.PAGE_SIZE);
+        out.putInt(pagenum_let);
+        out.putInt(pagenum_gar);
+        out.putInt(nextpageid_let);
+        out.putInt(nextpageid_gar);
         while (out.hasRemaining()) ch_let.write(out, out.position());
     }
 
@@ -308,6 +302,3 @@ public class BufferPool {
         ch_gar.close();
     }
 }
-
-
-
