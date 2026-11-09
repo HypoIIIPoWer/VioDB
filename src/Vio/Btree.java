@@ -18,21 +18,18 @@ public class Btree {
     public static final VarHandle LONG = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
     private final int INDEX_LEN;
-    private final int INSERT_FACTOR = 9;  //在一开始只装90%防止后续一直要分裂
+    private final int INSERT_FACTOR = MetaPage.INSERT_FACTOR;  //在一开始只装90%防止后续一直要分裂，通过 * 57 再 >> 6
     private String filename;
     private BufferPool bp;
     private ComparatorFactory.KeyComparator kc;
-    private final int[] metaPage;
     private int rootid;
-    private int leaf_num;
     private final int ORDER = 0; // TODO:think about a way to measure ORDER of the tree!!!
 
     Btree(ComparatorFactory.KeyComparator keycomp, int index_len, String name) throws IOException {
         INDEX_LEN = index_len;
         filename = name;
         bp = new BufferPool(filename);
-        metaPage = bp.metaPage;
-        rootid = (int)INT.get(metaPage, 4);
+        rootid = MetaPage.buf[4];
         kc = keycomp;
 
     }
@@ -42,7 +39,7 @@ public class Btree {
         INNER(1),
         LEAF(2);
 
-        int type;
+        public final int type;
         NodeType(int tp){
             type = tp;
         }
@@ -75,7 +72,7 @@ public class Btree {
             return (this.buf[2] == 1);
         }
 
-        public int getRightSibiling(){
+        public int getRightSibling(){
             return (int)INT.get(buf, 1);
         }
 
@@ -113,16 +110,20 @@ public class Btree {
             return (int)INT.get(buf, 3);
         }
 
-        public void writeBack(boolean dirty){
-            bp.unpin(pageid, dirty);
+        public void writeBack(boolean if_dirty){
+            bp.unpin(pageid, if_dirty);
         }
 
-        public boolean is_full(){
-            return is_let() ? let_is_full() : gar_is_full();
-        }
-
-        public boolean let_is_full(){
+        public boolean let_is_totally_full(){
             return (getKeyNum() == ORDER - 1);
+        }
+
+        public boolean let_is_almost_full(){
+            return (getKeyNum() >= ((ORDER - 1) * INSERT_FACTOR) >> 6);
+        }
+
+        public boolean let_is_half_full(){
+            return (getKeyNum() * 2 >= (ORDER - 1));
         }
 
         public boolean gar_is_full(){
@@ -141,35 +142,34 @@ public class Btree {
     }
 
 
-    private class metaNode{     //叶子层的链表头
-        int first_leaf_id;
-
-        metaNode(){
-
-        }
+    private boolean tree_is_empty(){
+        return (MetaPage.leaf_num == 0);
     }
 
-    private boolean tree_is_empty(){
-        return (leaf_num == 0);
+    private void makeRootNode() throws IOException{
+        Node rootnode = new Node(bp.allocatePage(true).buf);
+        rootnode.pageid = 1;
+        BYTE.set(rootnode.buf, 0, 0);
+        BYTE.set(rootnode.buf, 1, 1);
+        BYTE.set(rootnode.buf, 2, 1);
+        BYTE.set(rootnode.buf, 3, 0);
+        INT.set(rootnode.buf, 1, 0);
+        INT.set(rootnode.buf, 2, 0);
+        INT.set(rootnode.buf, 3, rootnode.pageid);
+        INT.set(rootnode.buf, 4, 0);
+        rootid = 1;
     }
 
     public void insert(FixedLenRecord record) throws IOException{
 
         Node rootnode;
         if(tree_is_empty()){
-            rootnode = new Node(bp.allocatePage(true).buf);
-            //TODO:need to add more things!!!
-        }else {
-            rootnode = new Node(bp.getPage(rootid).buf);
+            makeRootNode();
         }
+        rootnode = new Node(bp.getPage(rootid).buf);
         Deque<Integer> node_stack = new ArrayDeque<>();
         node_stack.push(rootid);
         int dest_let_page = btreeInsert(rootnode, record, node_stack);
-    }
-
-    private int createNode(){
-        //TODO:create a new node and return pageid!!!
-        return 0;
     }
 
     private int btreeInsert(Node node, FixedLenRecord record, Deque<Integer> node_stack) throws IOException { //定长记录
@@ -188,25 +188,47 @@ public class Btree {
         return btreeInsert(node.turnInto(nextpageid), record, node_stack);
     }
 
-    private void updateFatherNodes(){
+    private void updateFatherNodes(Deque<Integer> node_stack){
         //TODO:recursively update father nodes!!!
     }
 
-    private int makeLetPage(){
-        //TODO:
-        return 0;
+    private int makeLetPage(FixedLenRecord record, int rsibling) throws IOException{
+        Node node = new Node(bp.getPage(MetaPage.nextpageid_let).buf);
+        node.pageid = MetaPage.nextpageid_let - 1;
+        BYTE.set(node.buf, 0, 0);//等待进一步初始化
+        BYTE.set(node.buf, 1, 0);//等待进一步初始化
+        BYTE.set(node.buf, 2, 1);
+        BYTE.set(node.buf, 3, 0);
+        INT.set(node.buf, 1, rsibling);
+        INT.set(node.buf, 2, 0);
+        INT.set(node.buf, 3, node.pageid);
+        INT.set(node.buf, 4, record.key_len);
+        return node.pageid;
     }
 
-    private int makeGarPage(){
-        //TODO:
-        return 0;
+    private int giveGarPage(FixedLenRecord record) throws IOException{
+        Node node = new Node(bp.getPage(MetaPage.pagenum_gar).buf);
+        if(!node.gar_is_full()){
+            return node.pageid;
+        }else {
+            node.writeBack(false);
+            node = new Node(bp.allocatePage(false ).buf);
+            node.pageid = MetaPage.nextpageid_gar + 1;
+            BYTE.set(node.buf, 0, -1);
+            BYTE.set(node.buf, 1, -1);
+            BYTE.set(node.buf, 2, 0);
+            BYTE.set(node.buf, 3, 0);
+            INT.set(node.buf, 1, -1);
+            INT.set(node.buf, 2, 0);
+            INT.set(node.buf, 3, node.pageid);
+            INT.set(node.buf, 4, record.value_len);
+            return node.pageid;
+        }
     }
 
     private void leafPageWriteIn(Node node, FixedLenRecord record, int pos) throws IOException{ //定长
         int start = Page.HEAD_SIZE + (record.key_len + 4) * (pos + 1);
-        for(int i = 0; i < record.key_len; i++){
-            node.buf[start + i] = record.key[i];
-        }
+        System.arraycopy(record.key, 0, node.buf, start, record.key_len);
         start += record.key_len;
         int sewedGarPageid = garPageWriteIn(record);
         INT.set(node.buf, start, sewedGarPageid);
@@ -214,18 +236,14 @@ public class Btree {
     }
 
     private int garPageWriteIn(FixedLenRecord record) throws IOException{ //定长
-        int pageid = -getGarNum();
+        int pageid = giveGarPage(record);
         Node node = new Node(bp.getPage(pageid).buf);
-        if(!node.gar_is_full()){
-            int pos = node.getValueNum() * record.value_len + Page.HEAD_SIZE;
-            System.arraycopy(node.buf, pos, record.value, 0, record.value_len);
-            int sewedGarPageid = Basic.sew2ShortsIntoInt((short)pageid, (short)node.getValueNum());
-            node.selfPlusValueNum();
-            node.writeBack(true);
-            return sewedGarPageid;
-        }else {
-
-        }
+        int pos = node.getValueNum() * record.value_len + Page.HEAD_SIZE;
+        System.arraycopy(node.buf, pos, record.value, 0, record.value_len);
+        int sewedGarPageid = Basic.sew2ShortsIntoInt((short)pageid, (short)node.getValueNum());
+        node.selfPlusValueNum();
+        node.writeBack(true);
+        return sewedGarPageid;
     }
 
 }

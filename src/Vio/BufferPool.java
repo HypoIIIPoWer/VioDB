@@ -30,7 +30,6 @@ import java.util.Map;
 public class BufferPool {
     private static final Path ROOT_PATH = getRootPath();
     private static final int MAX_FRAME_NUM = 20;
-    public int[] metaPage;
 
 
     private static Path getRootPath(){
@@ -48,10 +47,6 @@ public class BufferPool {
 
     private final String tablename;
     private int clock_pointer = 0;
-    private int pagenum_let; //in metapage
-    private int pagenum_gar; //in metapage
-    private int nextpageid_let; //in metapage
-    private int nextpageid_gar; //in metapage
     private Map<Integer, Integer> pageframehash; //pageid -> frameid (a hashtable)
     private ArrayDeque<Integer> freeframes; //a deque restores free frames
     private byte[] clock; //restore bools that signs if a frame is used lately
@@ -85,26 +80,19 @@ public class BufferPool {
             pool[i] = new Page();
         }
         pageframehash = new HashMap<>();
-        initMetaPage();
     }
 
-    private void initMetaPage() throws IOException {
-        pagenum_let    = metaPage[0];
-        pagenum_gar    = metaPage[1];
-        nextpageid_let = metaPage[2];
-        nextpageid_gar = metaPage[3];
-    }
 
     private void closeMetaPage() throws IOException {
-        metaPage[0] = pagenum_let;
-        metaPage[1] = pagenum_gar;
-        metaPage[2] = nextpageid_let;
-        metaPage[3] = nextpageid_gar;
+        MetaPage.buf[0] = MetaPage.pagenum_let;
+        MetaPage.buf[1] = MetaPage.pagenum_gar;
+        MetaPage.buf[2] = MetaPage.nextpageid_let;
+        MetaPage.buf[3] = MetaPage.nextpageid_gar;
         ByteBuffer out = ByteBuffer.allocateDirect(Page.PAGE_SIZE);
-        out.putInt(pagenum_let);
-        out.putInt(pagenum_gar);
-        out.putInt(nextpageid_let);
-        out.putInt(nextpageid_gar);
+        out.putInt(MetaPage.pagenum_let);
+        out.putInt(MetaPage.pagenum_gar);
+        out.putInt(MetaPage.nextpageid_let);
+        out.putInt(MetaPage.nextpageid_gar);
         while (out.hasRemaining()) ch_let.write(out, out.position());
     }
 
@@ -200,7 +188,7 @@ public class BufferPool {
     public Page allocatePage(boolean is_let) throws IOException{
         if(is_let){
             Page newpage = new Page();
-            int newpageid = nextpageid_let;
+            int newpageid = MetaPage.nextpageid_let;
             int newframeid;
             if(poolIsFull()){
                 newframeid = killFrame();
@@ -223,12 +211,12 @@ public class BufferPool {
                 totalRead += n;
             }
 
-            pagenum_let++;
-            nextpageid_let++;
+            MetaPage.pagenum_let++;
+            MetaPage.nextpageid_let++;
             return newpage;
         }else{
             Page newpage = new Page();
-            int newpageid = nextpageid_gar;
+            int newpageid = MetaPage.nextpageid_gar;
             int newframeid;
             if(poolIsFull()){
                 newframeid = killFrame();
@@ -251,8 +239,8 @@ public class BufferPool {
                 totalRead += n;
             }
 
-            pagenum_gar++;
-            nextpageid_gar--;
+            MetaPage.pagenum_gar++;
+            MetaPage.nextpageid_gar--;
             return newpage;
         }
     }
